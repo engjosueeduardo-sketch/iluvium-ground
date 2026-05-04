@@ -1518,16 +1518,23 @@ with st.sidebar:
     st.subheader("🌍 Coordenadas GPS")
     with st.expander("📍 Capturar Localização"):
         st.info("Ative apenas quando necessário.")
-        if st.button("📡 Buscar Localização"):
-            try:
-                from streamlit_geolocation import streamlit_geolocation
-                g = streamlit_geolocation()
-                if g and g.get('latitude') is not None:
-                    st.session_state['gps_lat'] = float(g['latitude'])
-                    st.session_state['gps_lon'] = float(g['longitude'])
+        try:
+            from streamlit_geolocation import streamlit_geolocation
+            g = streamlit_geolocation()
+            if (g and isinstance(g, dict)
+                    and g.get('latitude') is not None
+                    and g.get('longitude') is not None):
+                _lat_g = float(g['latitude'])
+                _lon_g = float(g['longitude'])
+                if (_lat_g != st.session_state.get('gps_lat')
+                        or _lon_g != st.session_state.get('gps_lon')):
+                    st.session_state['gps_lat'] = _lat_g
+                    st.session_state['gps_lon'] = _lon_g
+                    st.toast(f"📡 GPS: {_lat_g:.5f}, {_lon_g:.5f}", icon="✅")
                     st.rerun()
-            except ImportError:
-                st.warning("Instale streamlit-geolocation")
+        except ImportError:
+            if st.button("📡 Buscar Localização (instale streamlit-geolocation)"):
+                st.warning("Adicione `streamlit-geolocation==0.0.8` ao requirements.txt")
     lat_input = st.number_input("Latitude",  value=st.session_state.get('gps_lat',-21.2089),
                                 format="%.6f", on_change=reseta_calculo)
     lon_input = st.number_input("Longitude", value=st.session_state.get('gps_lon',-50.4328),
