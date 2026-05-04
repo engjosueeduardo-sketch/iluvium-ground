@@ -1,0 +1,11 @@
+streamlit>=1.32.0
+numpy>=1.26.0
+pandas>=2.0.0
+plotly>=5.18.0
+scipy>=1.11.0
+fpdf2>=2.7.0
+folium>=0.15.0
+streamlit-folium>=0.18.0
+kaleido==0.2.1
+staticmap>=0.5.7
+Pillow>=10.0.0
