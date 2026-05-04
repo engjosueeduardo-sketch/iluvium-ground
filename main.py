@@ -2856,7 +2856,7 @@ with col_s:
         if a<=10: return 'color:#2e7d32;font-weight:bold'
         if a<=20: return 'color:#e65100;font-weight:bold'
         return 'color:#b71c1c;font-weight:bold'
-    styled = (df_d.style.applymap(_cor, subset=['Desvio %'])
+    styled = (df_d.style.map(_cor, subset=['Desvio %'])
               .format({"a [m]":"{:.1f}","Medida":"{:.1f}",
                        "Calculada":"{:.1f}","Desvio %":"{:+.2f}%"}))
     st.markdown("**📐 Desvios por Ponto**")
