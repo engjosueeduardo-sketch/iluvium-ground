@@ -288,7 +288,9 @@ def renderiza_mapa_estatico_png(lat, lon, desenhos_geojson, largura=1100, altura
 
     try:
         # Calcula zoom adequado pelos limites das features
-        TILE_URL = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+        # OpenStreetMap — gratuito, sem chave API, funciona em qualquer ambiente
+        # Fallback automático: tenta OSM padrão, depois CartoDB light
+        TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
 
         # Coleta todas coordenadas para auto-fit
         all_coords = [(lon, lat)]  # Centro
@@ -1630,6 +1632,13 @@ with st.sidebar:
     step_plot_ativo = st.checkbox("Step Plot (Perfil em Degraus)", value=True)
     st.divider()
     st.subheader("🌍 Coordenadas GPS")
+
+    # Inicializa coordenadas padrão se não existirem
+    if 'gps_lat' not in st.session_state:
+        st.session_state.gps_lat = -21.2089
+    if 'gps_lon' not in st.session_state:
+        st.session_state.gps_lon = -50.4328
+
     with st.expander("📍 Capturar Localização", expanded=False):
         try:
             from streamlit_geolocation import streamlit_geolocation
@@ -1642,26 +1651,36 @@ with st.sidebar:
                 st.success(f"📡 {_lat_g:.6f}, {_lon_g:.6f}")
                 if st.button("✅ Usar esta localização", type="primary",
                              use_container_width=True, key="btn_usar_gps"):
-                    st.session_state['gps_lat'] = _lat_g
-                    st.session_state['gps_lon'] = _lon_g
-                    st.session_state['gps_versao'] = st.session_state.get('gps_versao', 0) + 1
+                    # Atualiza direto nas keys dos widgets
+                    st.session_state['coord_lat'] = _lat_g
+                    st.session_state['coord_lon'] = _lon_g
+                    st.session_state['gps_lat']   = _lat_g
+                    st.session_state['gps_lon']   = _lon_g
                     st.rerun()
         except Exception:
             st.info("Componente streamlit-geolocation não disponível. "
                     "Digite as coordenadas manualmente abaixo.")
-    # key dinâmica força re-render quando GPS atualiza
-    _gps_ver = st.session_state.get('gps_versao', 0)
-    lat_input = st.number_input("Latitude",
-                                value=float(st.session_state.get('gps_lat', -21.2089)),
-                                format="%.6f", key=f"lat_{_gps_ver}",
-                                on_change=reseta_calculo)
-    lon_input = st.number_input("Longitude",
-                                value=float(st.session_state.get('gps_lon', -50.4328)),
-                                format="%.6f", key=f"lon_{_gps_ver}",
-                                on_change=reseta_calculo)
-    # Persiste manualmente no session_state para o mapa usar
+
+    # Keys FIXAS ('coord_lat', 'coord_lon') — valor controlado pelo session_state
+    # Nunca troca a key → o valor digitado pelo usuário nunca é descartado
+    lat_input = st.number_input(
+        "Latitude",
+        value=float(st.session_state.get('coord_lat', st.session_state.gps_lat)),
+        format="%.6f",
+        key="coord_lat",
+        on_change=reseta_calculo)
+    lon_input = st.number_input(
+        "Longitude",
+        value=float(st.session_state.get('coord_lon', st.session_state.gps_lon)),
+        format="%.6f",
+        key="coord_lon",
+        on_change=reseta_calculo)
+
+    # Sempre sincroniza session_state com o valor atual dos inputs
     st.session_state.lat_atual = lat_input
     st.session_state.lon_atual = lon_input
+    st.session_state.gps_lat   = lat_input
+    st.session_state.gps_lon   = lon_input
     st.divider()
     with st.expander("ℹ️ Motor v3.8"):
         st.markdown("""
@@ -2169,7 +2188,12 @@ if mostrar_mapa:
         m = folium.Map(location=[lat_input, lon_input], zoom_start=15,
                        max_zoom=22, tiles=None)
         folium.TileLayer('https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
-                         attr='Google Maps', max_zoom=22, max_native_zoom=20).add_to(m)
+                         attr='Google Maps', max_zoom=22, max_native_zoom=20,
+                         name='Satélite Google').add_to(m)
+        folium.TileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                         attr='OpenStreetMap', name='OpenStreetMap',
+                         max_zoom=19).add_to(m)
+        folium.LayerControl(position='topright', collapsed=True).add_to(m)
 
         # Marcador central
         folium.CircleMarker([lat_input, lon_input], radius=7, color='yellow',
@@ -2789,7 +2813,12 @@ if _eixos_curva:
             _m3 = folium.Map(location=[lat_input, lon_input], zoom_start=17,
                              max_zoom=22, tiles=None)
             folium.TileLayer('https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
-                             attr='Google Maps', max_zoom=22, max_native_zoom=20).add_to(_m3)
+                             attr='Google Maps', max_zoom=22, max_native_zoom=20,
+                             name='Satélite Google').add_to(_m3)
+            folium.TileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                             attr='OpenStreetMap', name='OpenStreetMap',
+                             max_zoom=19).add_to(_m3)
+            folium.LayerControl(position='topright', collapsed=True).add_to(_m3)
             _pop = (f"<div style='font-family:sans-serif;text-align:center'>"
                     f"<b>ρ Representativa</b><br>"
                     f"<span style='font-size:26px;color:{_cor_r};font-weight:700'>"
