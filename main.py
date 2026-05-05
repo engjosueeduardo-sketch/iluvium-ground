@@ -1631,58 +1631,37 @@ with st.sidebar:
     st.divider()
     st.subheader("🌍 Coordenadas GPS")
     with st.expander("📍 Capturar Localização", expanded=False):
-        # Abordagem robusta: JS nativo via query params
-        # Funciona no Streamlit Cloud, tablet, celular e desktop
-        import streamlit.components.v1 as _components
-
-        _components.html("""
-        <style>
-          #btn-gps {
-            background:#c0392b; color:white; border:none;
-            padding:12px 24px; border-radius:6px; cursor:pointer;
-            font-size:15px; font-family:sans-serif; font-weight:600;
-            width:100%; margin-top:4px;
-          }
-          #btn-gps:hover { background:#a93226; }
-          #status { margin-top:8px; font-family:sans-serif; font-size:13px; }
-        </style>
-        <button id="btn-gps" onclick="capturarGPS()">📡 Capturar localização GPS</button>
-        <div id="status">Aguardando...</div>
-        <script>
-        function capturarGPS() {
-          var st = document.getElementById('status');
-          st.innerHTML = '⏳ Obtendo localização...';
-          if (!navigator.geolocation) {
-            st.innerHTML = '❌ GPS não disponível neste dispositivo.';
-            return;
-          }
-          navigator.geolocation.getCurrentPosition(
-            function(pos) {
-              var lat = pos.coords.latitude.toFixed(6);
-              var lon = pos.coords.longitude.toFixed(6);
-              st.innerHTML = '✅ Capturado: <b>' + lat + ', ' + lon + '</b><br>'
-                + 'Cole os valores nos campos Latitude e Longitude abaixo.';
-              // Cria links clicáveis para copiar
-              st.innerHTML += '<br><code style="background:#f0f0f0;padding:4px 8px">'
-                + lat + '</code> &nbsp; <code style="background:#f0f0f0;padding:4px 8px">'
-                + lon + '</code>';
-            },
-            function(err) {
-              var msgs = {1:'Permissão negada. Permita o GPS nas configurações do navegador.',
-                          2:'Posição indisponível.',
-                          3:'Tempo esgotado.'};
-              st.innerHTML = '❌ ' + (msgs[err.code] || err.message);
-            },
-            {enableHighAccuracy:true, timeout:15000, maximumAge:0}
-          );
-        }
-        </script>
-        """, height=120)
-        st.caption("Após capturar, copie e cole os valores nos campos abaixo.")
-    lat_input = st.number_input("Latitude",  value=st.session_state.get('gps_lat',-21.2089),
-                                format="%.6f", on_change=reseta_calculo)
-    lon_input = st.number_input("Longitude", value=st.session_state.get('gps_lon',-50.4328),
-                                format="%.6f", on_change=reseta_calculo)
+        try:
+            from streamlit_geolocation import streamlit_geolocation
+            g = streamlit_geolocation()
+            if (isinstance(g, dict)
+                    and g.get('latitude') is not None
+                    and g.get('longitude') is not None):
+                _lat_g = float(g['latitude'])
+                _lon_g = float(g['longitude'])
+                st.success(f"📡 {_lat_g:.6f}, {_lon_g:.6f}")
+                if st.button("✅ Usar esta localização", type="primary",
+                             use_container_width=True, key="btn_usar_gps"):
+                    st.session_state['gps_lat'] = _lat_g
+                    st.session_state['gps_lon'] = _lon_g
+                    st.session_state['gps_versao'] = st.session_state.get('gps_versao', 0) + 1
+                    st.rerun()
+        except Exception:
+            st.info("Componente streamlit-geolocation não disponível. "
+                    "Digite as coordenadas manualmente abaixo.")
+    # key dinâmica força re-render quando GPS atualiza
+    _gps_ver = st.session_state.get('gps_versao', 0)
+    lat_input = st.number_input("Latitude",
+                                value=float(st.session_state.get('gps_lat', -21.2089)),
+                                format="%.6f", key=f"lat_{_gps_ver}",
+                                on_change=reseta_calculo)
+    lon_input = st.number_input("Longitude",
+                                value=float(st.session_state.get('gps_lon', -50.4328)),
+                                format="%.6f", key=f"lon_{_gps_ver}",
+                                on_change=reseta_calculo)
+    # Persiste manualmente no session_state para o mapa usar
+    st.session_state.lat_atual = lat_input
+    st.session_state.lon_atual = lon_input
     st.divider()
     with st.expander("ℹ️ Motor v3.8"):
         st.markdown("""
@@ -2783,144 +2762,6 @@ if _eixos_curva:
                 "rho_max":"ρ máx", "sigma":"σ", "n":"Eixos"
             }).round(2)
             st.dataframe(_df_tab, use_container_width=True, hide_index=True)
-
-# ── Curva de Sondagem SEV — Estilo IPI2Win ──────────────────────────────
-# Mostrada em largura total, abaixo das 3 colunas
-st.markdown("### 📈 Curva de Sondagem Elétrica Vertical (SEV)")
-st.caption("Resistividade aparente ρₐ vs espaçamento AB/2 (escala log-log). "
-           "Círculos = dados medidos · Linha contínua = curva por eixo · "
-           "Linha azul em degraus = modelo de camadas (após cálculo Stefanescu).")
-
-if _eixos_curva:
-    _fig_sev = go.Figure()
-
-    # ── Dados medidos por eixo (círculos, cor do eixo) ──────────────────
-    for _d in _eixos_curva:
-        _df_sev = st.session_state.dados_tabelas[_d]
-        _a_sev, _r_sev = [], []
-        for _, _row in _df_sev.iterrows():
-            _av = parse_br_float(_row[COL_A])
-            _rv = parse_br_float(_row[COL_RHO])
-            if _av and _rv:
-                _a_sev.append(_av / 2)   # AB/2 = a/2 no Wenner
-                _r_sev.append(_rv)
-
-        if _a_sev:
-            _fig_sev.add_trace(go.Scatter(
-                x=_a_sev, y=_r_sev,
-                mode='markers',
-                name=f"Medidos Eixo {_d}",
-                marker=dict(
-                    size=10, color=COR_MAP[_d],
-                    symbol='circle-open', line=dict(width=2, color=COR_MAP[_d])),
-                hovertemplate=f'<b>Eixo {_d}</b><br>AB/2=%{{x:.1f}} m<br>'
-                              'ρₐ=%{y:.1f} Ω·m<extra></extra>'))
-
-            # Curva suavizada (interpola em log-log)
-            if len(_a_sev) >= 3:
-                import numpy as _np2
-                _a_log = _np2.log10(_a_sev)
-                _r_log = _np2.log10(_r_sev)
-                _a_int = _np2.linspace(min(_a_log), max(_a_log), 120)
-                try:
-                    _coef = _np2.polyfit(_a_log, _r_log, min(3, len(_a_sev)-1))
-                    _r_int = _np2.polyval(_coef, _a_int)
-                    _fig_sev.add_trace(go.Scatter(
-                        x=10**_a_int, y=10**_r_int,
-                        mode='lines', name=f"Curva Eixo {_d}",
-                        line=dict(color=COR_MAP[_d], width=2),
-                        hoverinfo='skip'))
-                except Exception:
-                    pass
-
-    # ── Modelo de camadas em degraus (azul, estilo IPI2Win) ─────────────
-    # Só disponível após cálculo Stefanescu
-    if (st.session_state.get('calc_concluido')
-            and st.session_state.get('res_x') is not None
-            and st.session_state.get('camadas_atuais')):
-        try:
-            _res_x   = st.session_state.res_x
-            _n_cam   = st.session_state.camadas_atuais
-            _a_g_sev = st.session_state.get('a_g', np.array([]))
-            _rho_calc = st.session_state.get('rho_final_calc', np.array([]))
-
-            # Linha calculada (vermelha) — curva teórica ajustada
-            if len(_a_g_sev) and len(_rho_calc):
-                _a_ord  = np.argsort(_a_g_sev)
-                _fig_sev.add_trace(go.Scatter(
-                    x=_a_g_sev[_a_ord] / 2,
-                    y=_rho_calc[_a_ord],
-                    mode='lines',
-                    name='<b>Curva calculada</b>',
-                    line=dict(color='#c0392b', width=3),
-                    hovertemplate='AB/2=%{x:.1f} m<br>ρ calc=%{y:.1f} Ω·m<extra></extra>'))
-
-            # Linha azul em degraus (modelo de camadas)
-            # _res_x = [rho1, h1, rho2, h2, ..., rho_n]
-            _rhos_m, _hs_m = [], []
-            for _ki in range(_n_cam):
-                _rhos_m.append(_res_x[_ki * 2])
-                if _ki < _n_cam - 1:
-                    _hs_m.append(_res_x[_ki * 2 + 1])
-
-            # Degraus: profundidade acumulada
-            _z_acc = 0.0
-            _degrau_x, _degrau_y = [], []
-            _a_max_sev = max(_a_g_sev) / 2 if len(_a_g_sev) else 100
-            _a_min_sev = min(_a_g_sev) / 2 if len(_a_g_sev) else 1
-
-            for _ki, _rho_k in enumerate(_rhos_m):
-                _z_top = _z_acc
-                if _ki < len(_hs_m):
-                    _z_bot = _z_acc + _hs_m[_ki]
-                    _z_acc = _z_bot
-                else:
-                    _z_bot = _a_max_sev * 3  # última camada vai ao infinito
-
-                # No IPI2Win, eixo x = AB/2 ≈ profundidade.
-                # Plotamos a linha do modelo como y=constante entre z_top e z_bot
-                _x_top = max(_a_min_sev * 0.5, _z_top if _z_top > 0 else _a_min_sev * 0.5)
-                _x_bot = min(_a_max_sev * 2, _z_bot)
-
-                if _degrau_x:  # degrau vertical
-                    _degrau_x.append(_x_top)
-                    _degrau_y.append(_rho_k)
-                _degrau_x.extend([_x_top, _x_bot])
-                _degrau_y.extend([_rho_k, _rho_k])
-
-            if _degrau_x:
-                _fig_sev.add_trace(go.Scatter(
-                    x=_degrau_x, y=_degrau_y,
-                    mode='lines',
-                    name='<b>Modelo (camadas)</b>',
-                    line=dict(color='#0a3d91', width=3),
-                    hovertemplate='AB/2=%{x:.1f} m<br>ρ modelo=%{y:.1f} Ω·m<extra></extra>'))
-        except Exception:
-            pass
-
-    _fig_sev.update_layout(
-        xaxis=dict(
-            title="AB/2 (m)  ≈  Profundidade de investigação",
-            type='log', showgrid=True,
-            gridcolor='lightgray', minor=dict(showgrid=True),
-            tickfont=dict(size=11), linecolor='black', mirror=True),
-        yaxis=dict(
-            title="Resistividade aparente ρₐ (Ω·m)",
-            type='log', showgrid=True,
-            gridcolor='lightgray', minor=dict(showgrid=True),
-            tickfont=dict(size=11), linecolor='black', mirror=True),
-        template='plotly_white', height=420,
-        margin=dict(t=20, b=60, l=80, r=20),
-        legend=dict(
-            x=1.01, y=1, xanchor='left',
-            bgcolor='rgba(255,255,255,0.9)',
-            bordercolor='black', borderwidth=1),
-        plot_bgcolor='white', paper_bgcolor='white')
-
-    st.plotly_chart(_fig_sev, use_container_width=True)
-    st.session_state.fig_sev = _fig_sev
-else:
-    st.info("Preencha dados de resistividade para gerar a curva SEV.")
 
     with _col_m:
         # Marcador único representativo
