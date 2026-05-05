@@ -2203,15 +2203,16 @@ if mostrar_mapa:
             )
 
             try:
-                # Renderiza geometria individual
+                # Renderiza geometria individual (usa espessura salva pelo usuário)
+                _peso = int(props.get("weight", 4))
                 folium.GeoJson(
                     feat,
-                    style_function=lambda _f, _c=cor: {
-                        "color": _c, "weight": 5,
+                    style_function=lambda _f, _c=cor, _w=_peso: {
+                        "color": _c, "weight": _w,
                         "fillColor": _c, "fillOpacity": 0.25
                     },
-                    highlight_function=lambda _f, _c=cor: {
-                        "color": _c, "weight": 8, "fillOpacity": 0.4
+                    highlight_function=lambda _f, _c=cor, _w=_peso: {
+                        "color": _c, "weight": _w + 3, "fillOpacity": 0.4
                     },
                     tooltip=folium.Tooltip(tip_html, sticky=True),
                 ).add_to(m)
@@ -2283,8 +2284,10 @@ if mostrar_mapa:
 
         # ── Render: returned_objects diferentes por modo ──────────────────
         if modo_desenho:
+            # Key dinâmica: muda quando coordenadas mudam → força re-render centrado
+            _map_key = f"mapa_main_draw_{round(lat_input,4)}_{round(lon_input,4)}"
             map_data = st_folium(m, height=480, use_container_width=True,
-                                 key="mapa_main_draw",
+                                 key=_map_key,
                                  returned_objects=["all_drawings","last_active_drawing"])
 
             # ── Captura de novos desenhos ─────────────────────────────────
@@ -2336,7 +2339,7 @@ if mostrar_mapa:
                         st.rerun()  # ← força re-render para mostrar novo feature colorido
         else:
             st_folium(m, height=420, use_container_width=True,
-                      returned_objects=[], key="mapa_main")
+                      returned_objects=[], key=f"mapa_main_{round(lat_input,4)}_{round(lon_input,4)}")
 
         # ── Painel de edição dos desenhos (SEMPRE VISÍVEL) ───────────────
         # Não está mais sob "if n_features > 0" — botão fixo no topo
@@ -2365,13 +2368,14 @@ if mostrar_mapa:
                 opcoes_eixo = ["—"] + list(direcoes_ativas) + ["Outro"]
 
                 # Cabeçalho da tabela
-                hc1, hc2, hc3, hc4, hc5, hc6 = st.columns([0.4, 1.2, 1.0, 1.0, 1.2, 0.6])
+                hc1, hc2, hc3, hc4, hc5, hc6, hc7 = st.columns([0.3, 1.0, 0.9, 0.7, 0.7, 1.0, 0.5])
                 hc1.markdown("**#**")
                 hc2.markdown("**Tipo**")
                 hc3.markdown("**Eixo**")
-                hc4.markdown("**Compr. (m)**")
-                hc5.markdown("**Observação**")
-                hc6.markdown("**🗑️**")
+                hc4.markdown("**Compr.(m)**")
+                hc5.markdown("**Esp.(px)**")
+                hc6.markdown("**Observação**")
+                hc7.markdown("**🗑️**")
                 st.divider()
 
                 houve_alteracao = False
@@ -2379,7 +2383,7 @@ if mostrar_mapa:
 
                 for i, feat in enumerate(desenhos_atuais.get("features", [])):
                     props = feat.setdefault("properties", {})
-                    rc1, rc2, rc3, rc4, rc5, rc6 = st.columns([0.4, 1.2, 1.0, 1.0, 1.2, 0.6])
+                    rc1, rc2, rc3, rc4, rc5, rc6, rc7 = st.columns([0.3, 1.0, 0.9, 0.7, 0.7, 1.0, 0.5])
                     rc1.markdown(f"**{i+1}**")
                     rc2.markdown(descrever_feature(feat))
 
@@ -2393,15 +2397,24 @@ if mostrar_mapa:
                         label_visibility="collapsed")
                     if novo_eixo != props.get("eixo"):
                         props["eixo"] = novo_eixo
-                        # Atualiza cor automaticamente
                         if novo_eixo in COR_EIXO_HEX:
                             props["color"] = COR_EIXO_HEX[novo_eixo]
                         houve_alteracao = True
 
                     rc4.markdown(f"`{comprimento_feature_m(feat):.1f}`")
 
+                    # Espessura da linha
+                    esp_atual = int(props.get("weight", 4))
+                    nova_esp = rc5.number_input(
+                        "Esp", value=esp_atual, min_value=1, max_value=20, step=1,
+                        key=f"feat_esp_{props.get('_id', i)}",
+                        label_visibility="collapsed")
+                    if nova_esp != esp_atual:
+                        props["weight"] = int(nova_esp)
+                        houve_alteracao = True
+
                     obs_atual = props.get("obs", "")
-                    nova_obs = rc5.text_input(
+                    nova_obs = rc6.text_input(
                         "Obs", value=obs_atual,
                         key=f"feat_obs_{props.get('_id', i)}",
                         label_visibility="collapsed",
@@ -2410,7 +2423,7 @@ if mostrar_mapa:
                         props["obs"] = nova_obs
                         houve_alteracao = True
 
-                    if rc6.button("🗑️", key=f"feat_del_{props.get('_id', i)}",
+                    if rc7.button("🗑️", key=f"feat_del_{props.get('_id', i)}",
                                   help="Remover este desenho"):
                         idx_para_remover = i
 
@@ -2936,8 +2949,8 @@ if not st.session_state.get('calc_concluido', False):
                     st.session_state.df_d_resultado,
                     st.session_state.erro_rms_log,
                     st.session_state.erro_rms_pct,
-                    st.session_state.get('lat_center', lat_input),
-                    st.session_state.get('lon_center', lon_input),
+                    lat_input,
+                    lon_input,
                     st.session_state.get('fig_resultado'),
                     fig_ps=st.session_state.get('fig_pseudo'),
                     desenhos_geojson=st.session_state.get('desenhos_geojson'))
@@ -3060,8 +3073,8 @@ with col_pdf:
             st.session_state.df_d_resultado,
             st.session_state.erro_rms_log,
             st.session_state.erro_rms_pct,
-            st.session_state.get('lat_center', lat_input),
-            st.session_state.get('lon_center', lon_input),
+            lat_input,
+            lon_input,
             st.session_state.get('fig_resultado', f),
             fig_ps=st.session_state.get('fig_pseudo', None),
             desenhos_geojson=st.session_state.get('desenhos_geojson', None))
