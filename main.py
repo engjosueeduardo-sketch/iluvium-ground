@@ -626,6 +626,120 @@ def gerar_laudo_pdf(df_res, df_desv, rms_log, rms_pct, lat, lon,
         except Exception:
             pass
 
+    # ── V.c COLUNA GEOELÉTRICA (log de sondagem estilo NBR) ───────────────
+    _fig_col_pdf = st.session_state.get('fig_coluna') if hasattr(st, 'session_state') else None
+    # Na geração do PDF, reconstruímos a coluna diretamente dos dados
+    if df_res is not None:
+        try:
+            import math as _mth, io as _io
+            _PALETA_PDF = [
+                (8,   0,107),(13,  0,201),(0,  23,255),(0, 102,255),
+                (0, 180,255),(0, 255,255),(127,255,212),(0, 250,154),
+                (0, 255,  0),(154,205, 50),(255,255,  0),(255,199,  0),
+                (255,140,  0),(255, 69,  0),(255,  0,  0),(139,  0,  0),
+            ]
+            # Reconstrói a curva média a partir dos resultados
+            _dados_col = {}
+            for _, row in df_res.iterrows():
+                _a2   = float(row.get("Medida", 0) or 0)
+                _rho2 = float(row.get("Calculada", 0) or 0)
+                if _a2 and _rho2:
+                    _z2 = round(0.519 * _a2, 2)
+                    _dados_col.setdefault(_z2, []).append(_rho2)
+
+            if _dados_col:
+                _curva_pdf = sorted([
+                    {"z": z, "med": sum(vs)/len(vs)} for z, vs in _dados_col.items()
+                ], key=lambda x: x["z"])
+
+                _rlo = _mth.log10(max(min(p["med"] for p in _curva_pdf), 1))
+                _rhi = _mth.log10(max(max(p["med"] for p in _curva_pdf), _rlo + 0.01))
+
+                def _hex_pdf(rho):
+                    t = (_mth.log10(max(rho,1))-_rlo)/(_rhi-_rlo)
+                    t = max(0., min(1., t))
+                    r,g,b = _PALETA_PDF[min(int(t*16),15)]
+                    return f"#{r:02X}{g:02X}{b:02X}"
+
+                def _tc_pdf(rho):
+                    t = (_mth.log10(max(rho,1))-_rlo)/(_rhi-_rlo)
+                    t = max(0.,min(1.,t))
+                    ri,gi,bi = _PALETA_PDF[min(int(t*16),15)]
+                    return 'black' if 0.299*ri+0.587*gi+0.114*bi > 140 else 'white'
+
+                _fig_vc = go.Figure()
+                for _ki, _pp in enumerate(_curva_pdf):
+                    _zt = 0.0 if _ki==0 else _curva_pdf[_ki-1]["z"]
+                    _zb = _pp["z"]
+                    _fig_vc.add_shape(
+                        type="rect", x0=0, x1=1, y0=_zt, y1=_zb,
+                        fillcolor=_hex_pdf(_pp["med"]),
+                        line=dict(color="black", width=1.2), layer="below")
+                    _fig_vc.add_annotation(
+                        x=0.5, y=(_zt+_zb)/2,
+                        text=f"<b>{_pp['med']:.0f} Ω·m</b>",
+                        showarrow=False,
+                        font=dict(size=13, color=_tc_pdf(_pp["med"]), family="Arial"),
+                        xanchor="center", yanchor="middle")
+                # Barra de cores horizontal
+                _zm = max(p["z"] for p in _curva_pdf)
+                for _ci,(_ri,_gi,_bi) in enumerate(_PALETA_PDF):
+                    _fig_vc.add_shape(
+                        type="rect",
+                        x0=_ci/16, x1=(_ci+1)/16, y0=_zm+0.15, y1=_zm+0.55,
+                        fillcolor=f"#{_ri:02X}{_gi:02X}{_bi:02X}",
+                        line=dict(color="black", width=0.5), layer="below")
+                _rho_min_str = f"{min(p['med'] for p in _curva_pdf):.0f}"
+                _rho_max_str = f"{max(p['med'] for p in _curva_pdf):.0f}"
+                _fig_vc.add_annotation(x=0, y=_zm+0.7,
+                    text=f"<b>{_rho_min_str}</b>",
+                    showarrow=False, font=dict(size=9), xanchor="left")
+                _fig_vc.add_annotation(x=0.5, y=_zm+0.7,
+                    text="<b>Resistividade (Ω·m)</b>",
+                    showarrow=False, font=dict(size=9), xanchor="center")
+                _fig_vc.add_annotation(x=1, y=_zm+0.7,
+                    text=f"<b>{_rho_max_str}</b>",
+                    showarrow=False, font=dict(size=9), xanchor="right")
+                _fig_vc.update_layout(
+                    xaxis=dict(visible=False, range=[0,1]),
+                    yaxis=dict(title="Profundidade z (m)", autorange="reversed",
+                               showgrid=True, gridcolor="#ddd",
+                               tickfont=dict(size=11, family="Arial")),
+                    template="plotly_white", height=500, width=400,
+                    margin=dict(t=20, b=10, l=60, r=10),
+                    plot_bgcolor="white", paper_bgcolor="white")
+
+                pdf.add_page()
+                pdf.set_font('Arial','B',12); pdf.set_fill_color(210,210,210)
+                pdf.cell(0,10,'V.c COLUNA GEOELETRICA (LOG DE SONDAGEM)',
+                         ln=True, fill=True)
+                pdf.set_font('Arial','',10); pdf.ln(3)
+                pdf.multi_cell(0,6, s(
+                    "Coluna geoeletrica vertical representando as faixas de resistividade "
+                    "por profundidade efetiva de investigacao (z = 0.519 x a, Wenner). "
+                    "Paleta cromatica conforme NBR 7117 / Res2DInv: azul = baixa "
+                    "resistividade, vermelho = alta resistividade."))
+                pdf.ln(2)
+                _tvc = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
+                _tvc.close()
+                try:
+                    _fig_vc.write_image(_tvc.name, engine='kaleido',
+                                        width=400, height=520, scale=2)
+                    # Centraliza a imagem (largura 80mm, centrada em 210mm)
+                    pdf.image(_tvc.name, x=65, w=80)
+                finally:
+                    try: os.remove(_tvc.name)
+                    except (OSError, PermissionError): pass
+                pdf.ln(3)
+                pdf.set_font('Arial','I',9); pdf.set_text_color(60,60,60)
+                pdf.multi_cell(0,5, s(
+                    "Figura 3 - Coluna geoeletrica da area ensaiada. "
+                    "Cada faixa representa a resistividade media naquela profundidade."),
+                    align='C')
+                pdf.set_text_color(0,0,0)
+        except Exception as _evc:
+            pass  # Não quebra o PDF se a coluna falhar
+
     # ── VI. MAPA DE LOCALIZAÇÃO E EIXOS DA MALHA ───────────────────────
     if desenhos_geojson and len(desenhos_geojson.get("features", [])) > 0:
         pdf.add_page()
@@ -1517,24 +1631,25 @@ with st.sidebar:
     st.divider()
     st.subheader("🌍 Coordenadas GPS")
     with st.expander("📍 Capturar Localização"):
-        st.info("Ative apenas quando necessário.")
+        st.info("Clique no botão abaixo para usar o GPS do dispositivo.")
         try:
             from streamlit_geolocation import streamlit_geolocation
+            # O widget renderiza seu próprio botão "Locate me"
             g = streamlit_geolocation()
             if (g and isinstance(g, dict)
                     and g.get('latitude') is not None
                     and g.get('longitude') is not None):
                 _lat_g = float(g['latitude'])
                 _lon_g = float(g['longitude'])
-                if (_lat_g != st.session_state.get('gps_lat')
-                        or _lon_g != st.session_state.get('gps_lon')):
+                st.success(f"📡 Localização capturada: {_lat_g:.6f}, {_lon_g:.6f}")
+                if st.button("✅ Usar esta localização", type="primary",
+                             use_container_width=True):
                     st.session_state['gps_lat'] = _lat_g
                     st.session_state['gps_lon'] = _lon_g
-                    st.toast(f"📡 GPS: {_lat_g:.5f}, {_lon_g:.5f}", icon="✅")
                     st.rerun()
         except ImportError:
-            if st.button("📡 Buscar Localização (instale streamlit-geolocation)"):
-                st.warning("Adicione `streamlit-geolocation==0.0.8` ao requirements.txt")
+            st.warning("Componente de GPS não instalado. "
+                       "Adicione `streamlit-geolocation==0.0.8` ao requirements.txt")
     lat_input = st.number_input("Latitude",  value=st.session_state.get('gps_lat',-21.2089),
                                 format="%.6f", on_change=reseta_calculo)
     lon_input = st.number_input("Longitude", value=st.session_state.get('gps_lon',-50.4328),
@@ -2510,72 +2625,126 @@ if _eixos_curva:
         st.plotly_chart(_fig_c, use_container_width=True)
         st.session_state.fig_pseudo = _fig_c
 
-    # ── Coluna Geoelétrica Colorida (estilo log de sondagem NBR) ──────────
+    # ── Coluna Geoelétrica — estilo NBR/Res2DInv ──────────────────────────
     with _col_col:
-        st.markdown("<div style='text-align:center;font-weight:700;font-size:13px;"
-                    "font-family:sans-serif;margin-bottom:6px'>🎨 Coluna<br>Geoelétrica</div>",
-                    unsafe_allow_html=True)
+        st.markdown(
+            "<div style='text-align:center;font-weight:700;font-size:13px;"
+            "font-family:sans-serif;margin-bottom:4px;letter-spacing:.05em'>"
+            "COLUNA GEOELÉTRICA</div>",
+            unsafe_allow_html=True)
 
         if _curva:
+            import math as _math
             _rho_min_all = min(p["rho_min"] for p in _curva)
             _rho_max_all = max(p["rho_max"] for p in _curva)
+            _rho_min_log = _math.log10(max(_rho_min_all, 1))
+            _rho_max_log = _math.log10(max(_rho_max_all, _rho_min_all * 1.1))
+
+            # Paleta idêntica ao Res2DInv (azul escuro → ciano → verde → amarelo → vermelho)
+            _PALETA_NBR = [
+                (8,   0, 107), (13,  0, 201), (0,  23, 255), (0, 102, 255),
+                (0, 180, 255), (0,  255, 255),(127,255, 212), (0, 250, 154),
+                (0, 255,   0), (154,205,  50),(255,255,   0), (255,199,   0),
+                (255,140,   0), (255, 69,   0),(255,  0,   0),(139,  0,   0),
+            ]
+
+            def _rgb_nbr(rho):
+                if _rho_max_log <= _rho_min_log:
+                    return _PALETA_NBR[8]
+                t = (_math.log10(max(rho, 1)) - _rho_min_log) / (_rho_max_log - _rho_min_log)
+                t = max(0.0, min(1.0, t))
+                idx = min(int(t * len(_PALETA_NBR)), len(_PALETA_NBR) - 1)
+                return _PALETA_NBR[idx]
+
+            def _hex_nbr(rho):
+                r, g, b = _rgb_nbr(rho)
+                return f"#{r:02X}{g:02X}{b:02X}"
+
+            def _text_color(rho):
+                r, g, b = _rgb_nbr(rho)
+                lum = 0.299*r + 0.587*g + 0.114*b
+                return "black" if lum > 140 else "white"
 
             _fig_col = go.Figure()
 
-            # Para cada intervalo de profundidade, desenha uma barra colorida
+            # Barras coloridas por intervalo de profundidade
             for _k, _p in enumerate(_curva):
                 _z_top = 0.0 if _k == 0 else _curva[_k-1]["z_m"]
                 _z_bot = _p["z_m"]
-                _cor   = _cor_rho(_p["rho_med"], _rho_min_all, _rho_max_all)
-                _dz    = _z_bot - _z_top if _z_bot > _z_top else 0.3
+                _cor_h = _hex_nbr(_p["rho_med"])
+                _tc    = _text_color(_p["rho_med"])
 
-                # Barra horizontal preenchida (y=profundidade, x=largura fixa)
                 _fig_col.add_shape(
                     type="rect",
-                    x0=0, x1=1, y0=_z_top, y1=_z_bot,
-                    fillcolor=_cor, line=dict(color='black', width=0.5),
+                    x0=0, x1=1,
+                    y0=_z_top, y1=_z_bot,
+                    fillcolor=_cor_h,
+                    line=dict(color="black", width=1),
                     layer="below")
 
-                # Rótulo de ρ dentro da barra
+                # Rótulo: valor de ρ + unidade
                 _fig_col.add_annotation(
-                    x=0.5, y=(_z_top + _z_bot)/2,
-                    text=f"<b>{_p['rho_med']:.0f}</b>",
+                    x=0.5, y=(_z_top + _z_bot) / 2,
+                    text=f"<b>{_p['rho_med']:.0f} Ω·m</b>",
                     showarrow=False,
-                    font=dict(size=10, color='white' if _p['rho_med'] < 300 else 'black',
-                              family='sans-serif'),
-                    xanchor='center', yanchor='middle')
+                    font=dict(size=11, color=_tc, family="Arial"),
+                    xanchor="center", yanchor="middle")
 
-            # Colorbar como legenda de escala
-            _fig_col.add_trace(go.Scatter(
-                x=[None], y=[None], mode='markers',
-                marker=dict(
-                    colorscale=[[i/15, _PALETA_1D[i]] for i in range(16)],
-                    cmin=_rho_min_all, cmax=_rho_max_all,
-                    colorbar=dict(
-                        title=dict(text='ρ (Ω·m)', side='right'),
-                        thickness=14, len=0.85,
-                        tickvals=[_rho_min_all,
-                                  (_rho_min_all+_rho_max_all)/2,
-                                  _rho_max_all],
-                        ticktext=[f"{_rho_min_all:.0f}",
-                                  f"{(_rho_min_all+_rho_max_all)/2:.0f}",
-                                  f"{_rho_max_all:.0f}"],
-                        outlinewidth=1, outlinecolor='black'),
-                    showscale=True, size=1, opacity=0),
-                showlegend=False))
+            # Barra de cores horizontal (legenda inferior estilo NBR)
+            _n = len(_PALETA_NBR)
+            for _ci, (_r, _g, _b) in enumerate(_PALETA_NBR):
+                _fig_col.add_shape(
+                    type="rect",
+                    x0=_ci/_n, x1=(_ci+1)/_n,
+                    y0=max(p["z_m"] for p in _curva) + 0.15,
+                    y1=max(p["z_m"] for p in _curva) + 0.45,
+                    fillcolor=f"#{_r:02X}{_g:02X}{_b:02X}",
+                    line=dict(color="black", width=0.5),
+                    layer="below")
+
+            # Rótulos min/max embaixo da barra de cores
+            _z_bar = max(p["z_m"] for p in _curva) + 0.5
+            _fig_col.add_annotation(
+                x=0, y=_z_bar,
+                text=f"<b>{_rho_min_all:.0f}</b>",
+                showarrow=False, font=dict(size=9, color="black"),
+                xanchor="left", yanchor="top")
+            _fig_col.add_annotation(
+                x=0.5, y=_z_bar,
+                text="<b>Resistividade (Ω·m)</b>",
+                showarrow=False, font=dict(size=9, color="black"),
+                xanchor="center", yanchor="top")
+            _fig_col.add_annotation(
+                x=1, y=_z_bar,
+                text=f"<b>{_rho_max_all:.0f}</b>",
+                showarrow=False, font=dict(size=9, color="black"),
+                xanchor="right", yanchor="top")
+
+            # Linha de superfície
+            _fig_col.add_shape(
+                type="line", x0=0, x1=1, y0=0, y1=0,
+                line=dict(color="black", width=2))
 
             _fig_col.update_layout(
-                xaxis=dict(visible=False, range=[0,1]),
-                yaxis=dict(title="z (m)", autorange='reversed',
-                           showgrid=True, gridcolor='lightgray',
-                           tickfont=dict(size=10)),
-                template='plotly_white', height=480,
-                margin=dict(t=10, b=50, l=50, r=60),
-                plot_bgcolor='white')
+                xaxis=dict(visible=False, range=[0, 1]),
+                yaxis=dict(
+                    title="Profundidade z (m)",
+                    autorange="reversed",
+                    showgrid=True, gridcolor="#e0e0e0",
+                    zeroline=True, zerolinecolor="black", zerolinewidth=2,
+                    tickfont=dict(size=11, family="Arial"),
+                    range=[-0.1,
+                           max(p["z_m"] for p in _curva) + 0.7]),
+                template="plotly_white",
+                height=500,
+                margin=dict(t=10, b=10, l=60, r=10),
+                plot_bgcolor="white",
+                paper_bgcolor="white")
 
             st.plotly_chart(_fig_col, use_container_width=True)
+            st.session_state.fig_coluna = _fig_col
         else:
-            st.info("Preencha dados para a coluna.")
+            st.info("Preencha dados para gerar a coluna.")
 
         # Tabela resumo
         if _curva:
