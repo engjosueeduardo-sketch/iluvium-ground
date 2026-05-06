@@ -1651,33 +1651,34 @@ with st.sidebar:
                 st.success(f"📡 {_lat_g:.6f}, {_lon_g:.6f}")
                 if st.button("✅ Usar esta localização", type="primary",
                              use_container_width=True, key="btn_usar_gps"):
-                    # Salva nas keys que o number_input lê como value=
-                    st.session_state.gps_lat  = _lat_g
-                    st.session_state.gps_lon  = _lon_g
+                    # Seta as keys dos widgets → atualiza campos na próxima renderização
+                    st.session_state['coord_lat'] = _lat_g
+                    st.session_state['coord_lon'] = _lon_g
                     st.session_state.lat_atual = _lat_g
                     st.session_state.lon_atual = _lon_g
-                    reseta_calculo()
+                    st.session_state.gps_lat   = _lat_g
+                    st.session_state.gps_lon   = _lon_g
                     st.rerun()
         except Exception:
             st.info("Componente streamlit-geolocation não disponível. "
                     "Digite as coordenadas manualmente abaixo.")
 
-    # SEM key= nos number_input → value= é respeitado a CADA rerun
-    # Quando GPS atualiza gps_lat/gps_lon e chama st.rerun(),
-    # o campo mostra o novo valor automaticamente.
-    # Quando o usuário digita manualmente, lat_input captura o valor digitado.
-    lat_input = st.number_input(
-        "Latitude",
-        value=float(st.session_state.get('gps_lat', -21.2089)),
-        format="%.6f",
-        step=0.000001)
-    lon_input = st.number_input(
-        "Longitude",
-        value=float(st.session_state.get('gps_lon', -50.4328)),
-        format="%.6f",
-        step=0.000001)
+    # Solução definitiva: key= fixo + setar session_state ANTES do widget
+    # Quando GPS confirma, seta st.session_state['coord_lat'] = novo_valor
+    # O widget com key='coord_lat' lê esse valor no próximo ciclo
+    if 'coord_lat' not in st.session_state:
+        st.session_state['coord_lat'] = -21.2089
+    if 'coord_lon' not in st.session_state:
+        st.session_state['coord_lon'] = -50.4328
 
-    # Persiste para uso em todo o app (mapa, PDF, cálculo)
+    lat_input = st.number_input(
+        "Latitude", format="%.6f", step=0.000001,
+        key="coord_lat")
+    lon_input = st.number_input(
+        "Longitude", format="%.6f", step=0.000001,
+        key="coord_lon")
+
+    # Persiste para uso em todo o app
     st.session_state.lat_atual = lat_input
     st.session_state.lon_atual = lon_input
     st.session_state.gps_lat   = lat_input
@@ -2298,6 +2299,8 @@ if mostrar_mapa:
                     'marker': True,
                     'circlemarker': False,
                 },
+                # edit=True habilita mover pontos e arrastar linhas
+                # featureGroup não especificado → edita todas as features do mapa
                 edit_options={'edit': True, 'remove': True}
             )
             draw.add_to(m)
@@ -2307,7 +2310,8 @@ if mostrar_mapa:
                 primary_area_unit='sqmeters',
                 secondary_area_unit='hectares').add_to(m)
 
-        # ── Render: returned_objects diferentes por modo ──────────────────
+        # ── Render ────────────────────────────────────────────────────────
+        # returned_objects inclui 'all_drawings' para capturar novos E editados
         if modo_desenho:
             # Key dinâmica: muda quando coordenadas mudam → força re-render centrado
             _map_key = f"mapa_main_draw_{round(lat_input,4)}_{round(lon_input,4)}"
@@ -2361,7 +2365,24 @@ if mostrar_mapa:
                                 f"+{len(features_novas)} feature(s) | "
                                 f"Eixo {eixo_ativo} | "
                                 f"Total: {len(existentes)+len(features_novas)}")
-                        st.rerun()  # ← força re-render para mostrar novo feature colorido
+                        # NÃO chama st.rerun() aqui — evita que o mapa suma
+
+            # Captura edições (mover/redimensionar features existentes)
+            if map_data and map_data.get("all_drawings"):
+                todos_canvas = map_data["all_drawings"]
+                if isinstance(todos_canvas, list) and len(todos_canvas) > 0:
+                    # Verifica se houve edição (coordenadas mudaram)
+                    existentes_ids = {
+                        f.get("properties", {}).get("_id", "")
+                        for f in desenhos_atuais.get("features", [])
+                    }
+                    for feat_canvas in todos_canvas:
+                        fid = feat_canvas.get("properties", {}).get("_id", "")
+                        if fid and fid in existentes_ids:
+                            # Atualiza geometria mantendo as propriedades
+                            for feat_salvo in st.session_state.desenhos_geojson.get("features", []):
+                                if feat_salvo.get("properties", {}).get("_id") == fid:
+                                    feat_salvo["geometry"] = feat_canvas["geometry"]
         else:
             st_folium(m, height=420, use_container_width=True,
                       returned_objects=[], key=f"mapa_main_{round(lat_input,4)}_{round(lon_input,4)}")
