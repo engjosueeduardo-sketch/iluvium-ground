@@ -1651,32 +1651,33 @@ with st.sidebar:
                 st.success(f"📡 {_lat_g:.6f}, {_lon_g:.6f}")
                 if st.button("✅ Usar esta localização", type="primary",
                              use_container_width=True, key="btn_usar_gps"):
-                    # Atualiza direto nas keys dos widgets
-                    st.session_state['coord_lat'] = _lat_g
-                    st.session_state['coord_lon'] = _lon_g
-                    st.session_state['gps_lat']   = _lat_g
-                    st.session_state['gps_lon']   = _lon_g
+                    # Salva nas keys que o number_input lê como value=
+                    st.session_state.gps_lat  = _lat_g
+                    st.session_state.gps_lon  = _lon_g
+                    st.session_state.lat_atual = _lat_g
+                    st.session_state.lon_atual = _lon_g
+                    reseta_calculo()
                     st.rerun()
         except Exception:
             st.info("Componente streamlit-geolocation não disponível. "
                     "Digite as coordenadas manualmente abaixo.")
 
-    # Keys FIXAS ('coord_lat', 'coord_lon') — valor controlado pelo session_state
-    # Nunca troca a key → o valor digitado pelo usuário nunca é descartado
+    # SEM key= nos number_input → value= é respeitado a CADA rerun
+    # Quando GPS atualiza gps_lat/gps_lon e chama st.rerun(),
+    # o campo mostra o novo valor automaticamente.
+    # Quando o usuário digita manualmente, lat_input captura o valor digitado.
     lat_input = st.number_input(
         "Latitude",
-        value=float(st.session_state.get('coord_lat', st.session_state.gps_lat)),
+        value=float(st.session_state.get('gps_lat', -21.2089)),
         format="%.6f",
-        key="coord_lat",
-        on_change=reseta_calculo)
+        step=0.000001)
     lon_input = st.number_input(
         "Longitude",
-        value=float(st.session_state.get('coord_lon', st.session_state.gps_lon)),
+        value=float(st.session_state.get('gps_lon', -50.4328)),
         format="%.6f",
-        key="coord_lon",
-        on_change=reseta_calculo)
+        step=0.000001)
 
-    # Sempre sincroniza session_state com o valor atual dos inputs
+    # Persiste para uso em todo o app (mapa, PDF, cálculo)
     st.session_state.lat_atual = lat_input
     st.session_state.lon_atual = lon_input
     st.session_state.gps_lat   = lat_input
