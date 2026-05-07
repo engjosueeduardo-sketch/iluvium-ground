@@ -274,56 +274,66 @@ def palmer_resistencia(a, rho, p, aplicar=True):
 # LAUDO PDF
 # =========================================================================
 def renderiza_mapa_estatico_png(lat, lon, desenhos_geojson, largura=1100, altura=700):
-    """Renderiza um mapa satélite com os desenhos sobrepostos como PNG.
-    Retorna bytes PNG ou None se falhar.
-
-    Usa a lib staticmap (leve, sem API key) e tiles ESRI World Imagery
-    (satélite gratuito). Desenha cada feature na cor do eixo atribuído."""
+    """Renderiza mapa satélite com desenhos. Auto-zoom focado nos features desenhados."""
     try:
         from staticmap import StaticMap, Line, CircleMarker, Polygon
         from PIL import Image, ImageDraw, ImageFont
-        import io
+        import io, math as _m
     except ImportError as e:
         return None, f"Bibliotecas faltando: {e}"
 
     try:
-        # Calcula zoom adequado pelos limites das features
-        # OpenStreetMap — gratuito, sem chave API, funciona em qualquer ambiente
-        # Fallback automático: tenta OSM padrão, depois CartoDB light
         TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
 
-        # Coleta todas coordenadas para auto-fit
-        all_coords = [(lon, lat)]  # Centro
+        # Coleta APENAS coordenadas dos desenhos (não inclui o centro GPS)
+        # → o zoom foca exatamente onde o usuário desenhou
+        feat_coords = []
         for feat in (desenhos_geojson or {}).get("features", []):
             geom = feat.get("geometry", {})
             gtype = geom.get("type", "")
             coords = geom.get("coordinates", [])
             if gtype == "Point" and len(coords) >= 2:
-                all_coords.append((coords[0], coords[1]))
+                feat_coords.append((coords[0], coords[1]))
             elif gtype == "LineString":
-                all_coords.extend([(c[0], c[1]) for c in coords if len(c) >= 2])
+                feat_coords.extend([(c[0], c[1]) for c in coords if len(c) >= 2])
             elif gtype == "Polygon":
                 ring = coords[0] if coords else []
-                all_coords.extend([(c[0], c[1]) for c in ring if len(c) >= 2])
+                feat_coords.extend([(c[0], c[1]) for c in ring if len(c) >= 2])
 
-        if len(all_coords) > 1:
-            min_lon = min(c[0] for c in all_coords); max_lon = max(c[0] for c in all_coords)
-            min_lat = min(c[1] for c in all_coords); max_lat = max(c[1] for c in all_coords)
-            spread_deg = max(max_lon - min_lon, max_lat - min_lat)
-            if spread_deg < 0.001:    zoom = 19
-            elif spread_deg < 0.005:  zoom = 17
-            elif spread_deg < 0.01:   zoom = 16
-            elif spread_deg < 0.05:   zoom = 14
-            elif spread_deg < 0.1:    zoom = 13
-            else:                     zoom = 12
+        if feat_coords:
+            # Centro = centroide dos desenhos
+            centro_lon = sum(c[0] for c in feat_coords) / len(feat_coords)
+            centro_lat = sum(c[1] for c in feat_coords) / len(feat_coords)
+            min_lon = min(c[0] for c in feat_coords)
+            max_lon = max(c[0] for c in feat_coords)
+            min_lat = min(c[1] for c in feat_coords)
+            max_lat = max(c[1] for c in feat_coords)
+            # Margem de 20% ao redor dos desenhos
+            margem = 0.20
+            span_lon = max(max_lon - min_lon, 0.0005)
+            span_lat = max(max_lat - min_lat, 0.0005)
+            min_lon -= span_lon * margem; max_lon += span_lon * margem
+            min_lat -= span_lat * margem; max_lat += span_lat * margem
+            spread = max(max_lon - min_lon, max_lat - min_lat)
+            # Zoom calculado pelo spread com margem
+            if   spread < 0.001:  zoom = 19
+            elif spread < 0.003:  zoom = 18
+            elif spread < 0.007:  zoom = 17
+            elif spread < 0.015:  zoom = 16
+            elif spread < 0.03:   zoom = 15
+            elif spread < 0.07:   zoom = 14
+            elif spread < 0.15:   zoom = 13
+            else:                 zoom = 12
         else:
+            # Sem desenhos → usa o centro GPS com zoom padrão
+            centro_lon, centro_lat = lon, lat
             zoom = 17
 
         m = StaticMap(largura, altura, url_template=TILE_URL)
 
-        # Marcador central
-        m.add_marker(CircleMarker((lon, lat), 'yellow', 14))
-        m.add_marker(CircleMarker((lon, lat), '#000000', 6))
+        # Marcador do centro GPS (ponto amarelo pequeno)
+        m.add_marker(CircleMarker((lon, lat), 'yellow', 10))
+        m.add_marker(CircleMarker((lon, lat), '#000000', 4))
 
         # Adiciona cada feature na cor do eixo
         legenda_items = []  # (eixo, cor_hex, comprimento_total, qtd)
@@ -358,7 +368,7 @@ def renderiza_mapa_estatico_png(lat, lon, desenhos_geojson, largura=1100, altura
                 resumo_eixos[eixo]["qtd"] += 1
                 resumo_eixos[eixo]["comp"] += comp
 
-        img = m.render(zoom=zoom)
+        img = m.render(zoom=zoom, center=[centro_lon, centro_lat])
 
         # Adiciona LEGENDA sobreposta no canto inferior direito
         if resumo_eixos:
@@ -2137,7 +2147,7 @@ if mostrar_mapa:
         # Modo desenho + seletor de eixo ATIVO + ações rápidas
         # (Tudo numa única linha para não ocupar espaço)
         with st.container(border=True):
-            col_dm1, col_dm2, col_dm3, col_dm4 = st.columns([1.5, 1.5, 1, 1])
+            col_dm1, col_dm2, col_dm3, col_dm4, col_dm5 = st.columns([1.4, 1.4, 0.7, 0.7, 0.8])
 
             modo_desenho = col_dm1.checkbox(
                 "✏️ Modo Desenho",
@@ -2178,6 +2188,11 @@ if mostrar_mapa:
                 feat["properties"].setdefault("_id", f"feat_{i}_{int(time.time()*1000)%100000}")
 
             n_features = len(desenhos_atuais.get("features", []))
+            # Espessura padrão para novos desenhos
+            esp_pad = col_dm5.number_input(
+                "📏 px", min_value=1, max_value=20, value=4, step=1,
+                key="feat_esp_default",
+                help="Espessura padrão das novas linhas")
             if col_dm4.button(f"🗑️ Limpar ({n_features})", use_container_width=True,
                               disabled=n_features == 0):
                 st.session_state.desenhos_geojson = {"type":"FeatureCollection","features":[]}
@@ -2190,12 +2205,8 @@ if mostrar_mapa:
         m = folium.Map(location=[lat_input, lon_input], zoom_start=15,
                        max_zoom=22, tiles=None)
         folium.TileLayer('https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
-                         attr='Google Maps', max_zoom=22, max_native_zoom=20,
-                         name='Satélite Google').add_to(m)
-        folium.TileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                         attr='OpenStreetMap', name='OpenStreetMap',
-                         max_zoom=19).add_to(m)
-        folium.LayerControl(position='topright', collapsed=True).add_to(m)
+                         attr='Google Maps', max_zoom=22, max_native_zoom=20).add_to(m)
+
 
         # Marcador central
         folium.CircleMarker([lat_input, lon_input], radius=7, color='yellow',
@@ -2283,24 +2294,22 @@ if mostrar_mapa:
 
         # ── Adiciona Draw plugin se modo desenho ativo ────────────────────
         if modo_desenho:
-            # TODAS as ferramentas do Draw usam a cor do eixo ativo
-            cor_draw = COR_EIXO_HEX.get(eixo_ativo, "#3388ff")
+            cor_draw  = COR_EIXO_HEX.get(eixo_ativo, "#3388ff")
+            esp_draw  = int(st.session_state.get("feat_esp_default", 4))
             draw = plugins.Draw(
                 export=False,
                 position='topleft',
                 draw_options={
-                    'polyline':  {'shapeOptions': {'color': cor_draw, 'weight': 5}},
+                    'polyline':  {'shapeOptions': {'color': cor_draw, 'weight': esp_draw}},
                     'polygon':   {'shapeOptions': {'color': cor_draw, 'fillColor': cor_draw,
-                                                    'fillOpacity': 0.3, 'weight': 4}},
+                                                    'fillOpacity': 0.3, 'weight': esp_draw}},
                     'rectangle': {'shapeOptions': {'color': cor_draw, 'fillColor': cor_draw,
-                                                    'fillOpacity': 0.25, 'weight': 4}},
+                                                    'fillOpacity': 0.25, 'weight': esp_draw}},
                     'circle':    {'shapeOptions': {'color': cor_draw, 'fillColor': cor_draw,
                                                     'fillOpacity': 0.25}},
                     'marker': True,
                     'circlemarker': False,
                 },
-                # edit=True habilita mover pontos e arrastar linhas
-                # featureGroup não especificado → edita todas as features do mapa
                 edit_options={'edit': True, 'remove': True}
             )
             draw.add_to(m)
@@ -2311,78 +2320,43 @@ if mostrar_mapa:
                 secondary_area_unit='hectares').add_to(m)
 
         # ── Render ────────────────────────────────────────────────────────
-        # returned_objects inclui 'all_drawings' para capturar novos E editados
         if modo_desenho:
-            # Key dinâmica: muda quando coordenadas mudam → força re-render centrado
-            _map_key = f"mapa_main_draw_{round(lat_input,4)}_{round(lon_input,4)}"
-            map_data = st_folium(m, height=480, use_container_width=True,
+            # Key muda só quando coordenadas mudam (recentra o mapa)
+            # NÃO muda ao desenhar → mapa não some
+            _map_key = f"mapa_draw_{round(lat_input,4)}_{round(lon_input,4)}"
+            map_data = st_folium(m, height=500, use_container_width=True,
                                  key=_map_key,
-                                 returned_objects=["all_drawings","last_active_drawing"])
+                                 returned_objects=["last_active_drawing"])
 
-            # ── Captura de novos desenhos ─────────────────────────────────
-            # PROBLEMA ORIGINAL: Leaflet.Draw tem canvas SEPARADO do GeoJson.
-            # Ao re-renderizar, o canvas do Draw fica vazio — all_drawings só
-            # retorna o que foi desenhado NA SESSÃO ATUAL do canvas, não os
-            # já salvos em session_state. Por isso sempre fazemos APPEND,
-            # nunca substituição.
-            if map_data and map_data.get("all_drawings"):
-                novos_do_canvas = map_data["all_drawings"]
-                if isinstance(novos_do_canvas, list) and len(novos_do_canvas) > 0:
-                    cor_eixo_atual = COR_EIXO_HEX.get(eixo_ativo, "#3388ff")
-
-                    # IDs dos features já salvos (para evitar duplicatas)
-                    existentes = desenhos_atuais.get("features", [])
-                    ids_salvos = {f.get("properties", {}).get("_id", "")
-                                  for f in existentes}
-
-                    # Identifica só as features REALMENTE NOVAS
-                    features_novas = []
-                    for feat in novos_do_canvas:
-                        feat.setdefault("properties", {})
-                        fid = feat["properties"].get("_id", "")
-
-                        if fid and fid in ids_salvos:
-                            continue  # já existe, ignora
-
-                        # Feature nova: atribui eixo ativo + cor + id único
-                        feat["properties"]["eixo"]  = eixo_ativo
-                        feat["properties"]["color"] = cor_eixo_atual
-                        feat["properties"]["_id"]   = (
-                            f"feat_{len(existentes)+len(features_novas)}"
-                            f"_{int(time.time()*1000)%100000}")
-                        features_novas.append(feat)
-
-                    if features_novas:
-                        # APPEND: junta existentes + novos
-                        st.session_state.desenhos_geojson = {
-                            "type": "FeatureCollection",
-                            "features": existentes + features_novas
-                        }
-                        if st.session_state.get("laudo_atual_id"):
-                            adicionar_log(
-                                st.session_state.laudo_atual_id,
-                                "desenho_adicionado",
-                                f"+{len(features_novas)} feature(s) | "
-                                f"Eixo {eixo_ativo} | "
-                                f"Total: {len(existentes)+len(features_novas)}")
-                        # NÃO chama st.rerun() aqui — evita que o mapa suma
-
-            # Captura edições (mover/redimensionar features existentes)
-            if map_data and map_data.get("all_drawings"):
-                todos_canvas = map_data["all_drawings"]
-                if isinstance(todos_canvas, list) and len(todos_canvas) > 0:
-                    # Verifica se houve edição (coordenadas mudaram)
-                    existentes_ids = {
-                        f.get("properties", {}).get("_id", "")
-                        for f in desenhos_atuais.get("features", [])
+            # ── Captura APENAS o último desenho feito ──────────────────────
+            # last_active_drawing retorna só a feature recém-finalizada.
+            # Não varia a cada frame como all_drawings → mapa não pisca.
+            novo_feat = map_data.get("last_active_drawing") if map_data else None
+            if novo_feat and isinstance(novo_feat, dict) and novo_feat.get("geometry"):
+                cor_eixo_atual = COR_EIXO_HEX.get(eixo_ativo, "#3388ff")
+                existentes = desenhos_atuais.get("features", [])
+                # Evita duplicatas por geometria
+                novo_geom = str(novo_feat.get("geometry", ""))
+                ja_existe = any(
+                    str(f.get("geometry", "")) == novo_geom
+                    for f in existentes)
+                if not ja_existe:
+                    novo_feat.setdefault("properties", {})
+                    novo_feat["properties"]["eixo"]   = eixo_ativo
+                    novo_feat["properties"]["color"]  = cor_eixo_atual
+                    novo_feat["properties"]["weight"] = int(st.session_state.get(
+                        f"feat_esp_default", 4))
+                    novo_feat["properties"]["_id"] = (
+                        f"feat_{len(existentes)}_{int(time.time()*1000)%100000}")
+                    st.session_state.desenhos_geojson = {
+                        "type": "FeatureCollection",
+                        "features": existentes + [novo_feat]
                     }
-                    for feat_canvas in todos_canvas:
-                        fid = feat_canvas.get("properties", {}).get("_id", "")
-                        if fid and fid in existentes_ids:
-                            # Atualiza geometria mantendo as propriedades
-                            for feat_salvo in st.session_state.desenhos_geojson.get("features", []):
-                                if feat_salvo.get("properties", {}).get("_id") == fid:
-                                    feat_salvo["geometry"] = feat_canvas["geometry"]
+                    if st.session_state.get("laudo_atual_id"):
+                        adicionar_log(st.session_state.laudo_atual_id,
+                                      "desenho_adicionado",
+                                      f"Eixo {eixo_ativo} | "
+                                      f"Total: {len(existentes)+1}")
         else:
             st_folium(m, height=420, use_container_width=True,
                       returned_objects=[], key=f"mapa_main_{round(lat_input,4)}_{round(lon_input,4)}")
@@ -2835,12 +2809,8 @@ if _eixos_curva:
             _m3 = folium.Map(location=[lat_input, lon_input], zoom_start=17,
                              max_zoom=22, tiles=None)
             folium.TileLayer('https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
-                             attr='Google Maps', max_zoom=22, max_native_zoom=20,
-                             name='Satélite Google').add_to(_m3)
-            folium.TileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                             attr='OpenStreetMap', name='OpenStreetMap',
-                             max_zoom=19).add_to(_m3)
-            folium.LayerControl(position='topright', collapsed=True).add_to(_m3)
+                             attr='Google Maps', max_zoom=22, max_native_zoom=20).add_to(_m3)
+
             _pop = (f"<div style='font-family:sans-serif;text-align:center'>"
                     f"<b>ρ Representativa</b><br>"
                     f"<span style='font-size:26px;color:{_cor_r};font-weight:700'>"
