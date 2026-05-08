@@ -1638,7 +1638,7 @@ with st.sidebar:
     st.divider()
     st.subheader("🔧 Física da Medição")
     correcao_haste  = st.checkbox("Correção de Haste (Palmer)", value=False,
-                                  on_change=reseta_calculo)
+                                 )
     step_plot_ativo = st.checkbox("Step Plot (Perfil em Degraus)", value=True)
     st.divider()
     st.subheader("🌍 Coordenadas GPS")
@@ -1996,19 +1996,53 @@ if laudo_aberto_id:
                 st.rerun()
 else:
     # Aviso suave: sem laudo aberto
-    cw1, cw2, cw3 = st.columns([3, 1, 1])
-    cw1.info("💡 **Modo livre** — você está calculando sem um laudo aberto. "
-             "Para salvar este trabalho, crie um laudo em **📁 Meus Laudos**.")
-    if cw2.button("➕ Criar laudo agora", use_container_width=True):
-        st.session_state._redirect_to = "📁 Meus Laudos"
-        st.session_state.criar_laudo_modal = True
-        st.rerun()
-    if cw3.button("💾 Salvar rascunho", use_container_width=True,
-                  help=f"Salva em: {EMERGENCIA_PATH}"):
+    cw1, cw2, cw3 = st.columns([2.5, 1.2, 1.2])
+    cw1.info("💡 **Modo livre** — calculando sem laudo aberto.")
+    if cw2.button("💾 Salvar em Meus Laudos", use_container_width=True,
+                  type="primary", help="Cria um laudo com os dados atuais sem perder nada"):
+        st.session_state.salvar_modo_livre_modal = True
+    if cw3.button("💾 Rascunho rápido", use_container_width=True,
+                  help=f"Salva arquivo de recuperação em: {EMERGENCIA_PATH}"):
         if salvar_emergencia():
-            st.toast(f"Salvo em AppData\\Iluvium\\", icon="💾")
+            st.toast("Rascunho salvo!", icon="💾")
         else:
             st.toast("Erro ao salvar", icon="⚠️")
+
+# Modal de salvar modo livre (sem redirecionar — dados permanecem)
+if st.session_state.get("salvar_modo_livre_modal"):
+    with st.container(border=True):
+        st.subheader("💾 Salvar trabalho atual em Meus Laudos")
+        _ml1, _ml2 = st.columns(2)
+        _ml_cli  = _ml1.text_input("Cliente *", key="ml_cli")
+        _ml_proj = _ml2.text_input("Projeto *", key="ml_proj",
+                                    value="Malha de Aterramento")
+        _ml3, _ml4 = st.columns(2)
+        _ml_loc  = _ml3.text_input("Local da Obra *", key="ml_loc")
+        _ml_dat  = _ml4.date_input("Data do Ensaio",
+                                    value=datetime.now().date(), key="ml_dat")
+        _ml5, _ml6 = st.columns(2)
+        _ml_tec  = _ml5.text_input("Engenheiro", key="ml_tec")
+        _ml_crea = _ml6.text_input("CREA/CFT", key="ml_crea")
+        _mls1, _mls2 = st.columns(2)
+        if _mls1.button("✅ Salvar sem perder dados", type="primary",
+                         use_container_width=True):
+            if not (_ml_cli and _ml_proj and _ml_loc):
+                st.error("Preencha os campos obrigatórios (*)")
+            else:
+                _meta = {"cliente": _ml_cli, "projeto": _ml_proj,
+                         "local_obra": _ml_loc,
+                         "data_ensaio": _ml_dat.isoformat(),
+                         "status": "Rascunho",
+                         "tecnico": _ml_tec, "crea": _ml_crea}
+                _novo_id = salvar_laudo(_meta, criar_novo=True)
+                st.session_state.laudo_atual_id = _novo_id
+                st.session_state.laudo_atual_metadados = _meta
+                st.session_state.pop("salvar_modo_livre_modal", None)
+                st.toast("✅ Laudo criado! Você continua na Calculadora.", icon="💾")
+                st.rerun()
+        if _mls2.button("❌ Cancelar", use_container_width=True):
+            st.session_state.pop("salvar_modo_livre_modal", None)
+            st.rerun()
 
 # ── Oferta de recuperação (se houver arquivo de emergência) ──────────────
 if not st.session_state.get("recovery_checado"):
@@ -2045,7 +2079,7 @@ if st.session_state.get("recovery_pendente"):
 autosave_se_necessario()   # intervalo padrão = 5 min (EMERGENCIA_INTERVAL)
 
 direcoes_ativas = st.multiselect("📐 Direções Ativas (Trenas):", DIRECOES,
-                                  default=["A"], on_change=reseta_calculo)
+                                  default=["A"])
 if not direcoes_ativas:
     st.warning("Selecione pelo menos uma direção."); st.stop()
 
@@ -2108,7 +2142,6 @@ for i, d in enumerate(direcoes_ativas):
             df_ed = df_de_exibicao(df_ed_exib)
 
             if not df_ed.equals(df_interno):
-                mod = False
                 for idx in df_ed.index:
                     a_n   = parse_br_float(df_ed.at[idx, COL_A])
                     p_n   = parse_br_float(df_ed.at[idx, COL_P])
@@ -2118,21 +2151,21 @@ for i, d in enumerate(direcoes_ativas):
                     rho_o = parse_br_float(df_interno.at[idx, COL_RHO]) if idx in df_interno.index else None
                     a_o   = parse_br_float(df_interno.at[idx, COL_A])   if idx in df_interno.index else None
                     p_o   = parse_br_float(df_interno.at[idx, COL_P])   if idx in df_interno.index else None
+                    # Calcula ρ automaticamente quando R, a, p mudam
                     if (r_n and a_n and p_n and
                             (check_diff(r_n,r_o) or check_diff(a_n,a_o) or check_diff(p_n,p_o))):
                         c = round(palmer_rho_aparente(a_n, r_n, p_n, correcao_haste), 2)
                         if check_diff(c, rho_n):
-                            df_ed.at[idx, COL_RHO] = c; mod = True
+                            df_ed.at[idx, COL_RHO] = c
                     elif rho_n and a_n and p_n and check_diff(rho_n, rho_o):
                         c = round(palmer_resistencia(a_n, rho_n, p_n, correcao_haste), 4)
                         if check_diff(c, r_n):
-                            df_ed.at[idx, COL_R] = c; mod = True
+                            df_ed.at[idx, COL_R] = c
                 st.session_state.dados_tabelas[d] = df_ed
-                if mod:
-                    reseta_calculo(); st.session_state.precisa_atualizar = True
+                # NÃO recarrega a página ao digitar — o cálculo Stefanescu
+                # só roda quando o usuário clicar em ⚡ INICIAR CÁLCULO
 
-if st.session_state.get("precisa_atualizar"):
-    st.session_state.precisa_atualizar = False; st.rerun()
+# Removido: st.rerun() automático ao editar dados
 
 # =========================================================================
 # MAPA SATÉLITE — visível por padrão
@@ -2270,25 +2303,8 @@ if mostrar_mapa:
                             centro_ll = (avg_lt, avg_ln)
                     elif geom_type == "Point" and len(coords) >= 2:
                         centro_ll = (coords[1], coords[0])
-
-                    if centro_ll:
-                        label_html = (
-                            f"<div style='background:{cor};color:white;"
-                            f"padding:2px 8px;border-radius:3px;font-weight:700;"
-                            f"font-size:11px;font-family:sans-serif;"
-                            f"box-shadow:0 1px 3px rgba(0,0,0,.4);"
-                            f"white-space:nowrap'>"
-                            f"Eixo {eixo_atr} · {comp_m:.0f}m"
-                            f"</div>"
-                        )
-                        folium.Marker(
-                            location=centro_ll,
-                            icon=folium.DivIcon(
-                                html=label_html,
-                                icon_size=(120, 24),
-                                icon_anchor=(60, 12)
-                            )
-                        ).add_to(m)
+                    # Labels removidos do mapa — informações disponíveis
+                    # apenas no tooltip (hover) e no painel de edição abaixo
             except Exception:
                 pass
 
@@ -2323,7 +2339,7 @@ if mostrar_mapa:
         if modo_desenho:
             # Key muda só quando coordenadas mudam (recentra o mapa)
             # NÃO muda ao desenhar → mapa não some
-            _map_key = f"mapa_draw_{round(lat_input,4)}_{round(lon_input,4)}"
+            _map_key = "mapa_draw_fixo"
             map_data = st_folium(m, height=500, use_container_width=True,
                                  key=_map_key,
                                  returned_objects=["last_active_drawing"])
@@ -2359,7 +2375,7 @@ if mostrar_mapa:
                                       f"Total: {len(existentes)+1}")
         else:
             st_folium(m, height=420, use_container_width=True,
-                      returned_objects=[], key=f"mapa_main_{round(lat_input,4)}_{round(lon_input,4)}")
+                      returned_objects=[], key="mapa_main_fixo")
 
         # ── Painel de edição dos desenhos (SEMPRE VISÍVEL) ───────────────
         # Não está mais sob "if n_features > 0" — botão fixo no topo
@@ -2851,7 +2867,7 @@ st.divider()
 st.markdown("### 🔬 Motor de Estratificação Geofísica")
 
 col_nc, col_info, col_btn = st.columns([1, 2, 2])
-n_cam = col_nc.selectbox("Camadas:", [2, 3, 4], index=1, on_change=reseta_calculo,
+n_cam = col_nc.selectbox("Camadas:", [2, 3, 4], index=1,
     help="2=simples | 3=padrão NBR 7117 | 4=solos complexos")
 _pinfo = {2:"3 parâm. (ρ₁,ρ₂,h₁)", 3:"5 parâm. (ρ₁,ρ₂,ρ₃,h₁,h₂)",
           4:"7 parâm. (ρ₁,ρ₂,ρ₃,ρ₄,h₁,h₂,h₃)"}
